@@ -1,68 +1,74 @@
 package com.example.servicesamples
 
-import android.annotation.SuppressLint
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.Bundle
+import android.os.Handler
 import android.os.IBinder
+import android.os.Message
+import android.os.Messenger
 import android.util.Log
-import android.widget.Button
+import android.view.View
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 
 class MainActivity : AppCompatActivity() {
 
-    private var myService: MyService? = null
+    private var messenger: Messenger? = null
     private var isBound = false
-    private lateinit var countdownTextView: TextView
+    private lateinit var progressTextView: TextView
+    private val handler = Handler(Handler.Callback { msg ->
+        when (msg.what) {
+            MyService.MSG_START -> {
+                // Обработка сообщения о старте сервиса
+            }
+            MyService.MSG_STOP -> {
+                // Обработка сообщения о остановке сервиса
+            }
+            else -> return@Callback false
+        }
+        true
+    })
 
     private val connection = object : ServiceConnection {
-        override fun onServiceConnected(name: ComponentName, service: IBinder) {
-            val binder = service as MyService.MyBinder
-            myService = binder.getService()
-            myService?.startCountdown() // Запуск обратного отсчета
+        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            messenger = Messenger(service)
+            startService() // Запускаем сервис после подключения
             isBound = true
-            updateCountdown() // Начать обновление обратного отсчета
         }
 
-        override fun onServiceDisconnected(name: ComponentName) {
+        override fun onServiceDisconnected(name: ComponentName?) {
+            messenger = null
             isBound = false
         }
     }
 
-    @SuppressLint("MissingInflatedId")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        countdownTextView = findViewById(R.id.countdownTextView)
+        progressTextView = findViewById(R.id.progressTextView)
+        val startServiceButton = findViewById<View>(R.id.startServiceButton)
 
-        val startServiceButton = findViewById<Button>(R.id.startServiceButton)
         startServiceButton.setOnClickListener {
             Log.d(TAG, "Starting the service...")
             val serviceIntent = Intent(this, MyService::class.java)
-            bindService(serviceIntent, connection, BIND_AUTO_CREATE)
-            startService(serviceIntent)
+            startService(serviceIntent) // Запускаем сервис
+            bindService(serviceIntent, connection, Context.BIND_AUTO_CREATE) // Подписываемся на сервис
         }
     }
 
-    private fun updateCountdown() {
-        if (isBound) {
-            countdownTextView.postDelayed({
-                val currentProgress = myService?.getCurrentProgress() ?: return@postDelayed
-                countdownTextView.text = currentProgress.toString()
-                if (currentProgress > 0) {
-                    updateCountdown()
-                }
-            }, 1000)
-        }
+    private fun startService() {
+        messenger?.send(Message.obtain(null, MyService.MSG_START)) // Отправляем сообщение на старт сервиса
     }
 
     override fun onDestroy() {
         super.onDestroy()
         if (isBound) {
-            unbindService(connection)
+            messenger?.send(Message.obtain(null, MyService.MSG_STOP)) // Отправляем сообщение на остановку сервиса
+            unbindService(connection) // Отписываемся от сервиса
             isBound = false
         }
     }
