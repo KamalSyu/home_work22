@@ -1,118 +1,100 @@
 package com.example.servicesamples
 
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
-import android.os.Binder
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
+import android.os.Message
+import android.os.Messenger
 import android.os.IBinder
 import android.util.Log
-import androidx.core.app.NotificationCompat
 
 class MyService : Service() {
 
-    private val binder = MyBinder()
-    private var countdownTime = 20 // Установите 20 секунд
-    private val handler = Handler()
-    private lateinit var runnable: Runnable
+    private lateinit var messenger: Messenger
+    private lateinit var handlerThread: HandlerThread
+    private lateinit var serviceHandler: ServiceHandler // Объявляем переменную serviceHandler
+    private var progress = 0
+    private var isRunning = false
 
-    inner class MyBinder : Binder() {
-        fun getService(): MyService = this@MyService
+    private inner class ServiceHandler(looper: android.os.Looper) : Handler(looper) {
+        override fun handleMessage(msg: Message) {
+            when (msg.what) {
+                MSG_START -> startService()
+                MSG_STOP -> stopService()
+                else -> super.handleMessage(msg)
+            }
+        }
+    }
+
+    companion object {
+        private const val TAG = "MyService"
+        const val MSG_START = 1
+        const val MSG_STOP = 2
     }
 
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "Service created")
-        createNotificationChannel()
-    }
-
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "Service started")
-        startCountdown() // Запустите обратный отсчет
-        return START_STICKY // Убедитесь, что сервис будет перезапущен, если система убьет его
-    }
-
-    override fun onBind(intent: Intent): IBinder {
-        return binder
-    }
-
-    fun startCountdown() {
-        countdownTime = 20 // Сбросить время обратного отсчета
-        startForegroundService() // Запустить сервис в foreground
-        runnable = object : Runnable {
-            override fun run() {
-                if (countdownTime > 0) {
-                    Log.d(TAG, "Countdown: $countdownTime")
-                    updateNotification(countdownTime)
-                    countdownTime--
-                    handler.postDelayed(this, 1000)
-                } else {
-                    stopSelf() // Остановить сервис, когда обратный отсчет завершен
-                    Log.d(TAG, "Service finished countdown")
-                }
-            }
-        }
-        handler.post(runnable) // Запуск обратного отсчета
+        startForegroundService()
+        handlerThread = HandlerThread("ServiceThread")
+        handlerThread.start()
+        serviceHandler = ServiceHandler(handlerThread.looper) // Инициализируем serviceHandler
+        messenger = Messenger(serviceHandler) // Инициализация Messenger
     }
 
     private fun startForegroundService() {
-        val notificationIntent = Intent(this, MainActivity::class.java)
-        val pendingIntent = PendingIntent.getActivity(this, 0, notificationIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Service Running")
-            .setContentText("Countdown: $countdownTime seconds")
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentIntent(pendingIntent)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setOngoing(true)
-            .setProgress(20, countdownTime, false)
-            .build()
-
-        startForeground(1, notification) // Запуск foreground-сервиса
-    }
-
-    private fun updateNotification(progress: Int) {
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Service Running")
-            .setContentText("Countdown: $progress seconds")
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setOngoing(true)
-            .setProgress(20, progress, false)
-            .build()
-
+        val notificationChannelId = "MyServiceChannel"
         val notificationManager = getSystemService(NotificationManager::class.java)
-        notificationManager.notify(1, notification) // Обновление уведомления
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(notificationChannelId, "My Service Channel", NotificationManager.IMPORTANCE_DEFAULT)
+            notificationManager.createNotificationChannel(channel)
+        }
+
+        val notification = Notification.Builder(this, notificationChannelId)
+            .setContentTitle("My Service")
+            .setContentText("Service is running...")
+            .setSmallIcon(R.drawable.ic_service_icon) // Замените на ваш значок
+            .build()
+
+        startForeground(1, notification) // Запускаем сервис в фоновом режиме с уведомлением
     }
 
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val serviceChannel = NotificationChannel(
-                CHANNEL_ID,
-                "Foreground Service Channel",
-                NotificationManager.IMPORTANCE_DEFAULT
-            )
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(serviceChannel)
-        }
+    private fun startService() {
+        Log.d(TAG, "Starting service...")
+        isRunning = true
+        progress = 20 // Установим прогресс в 20 секунд
+        serviceHandler.postDelayed(object : Runnable {
+            override fun run() {
+                if (progress > 0 && isRunning) {
+                    progress--
+                    // Здесь вы можете отправить сообщение обратно в активность, если нужно
+                } else {
+                    stopSelf() // Останавливаем сервис, когда прогресс достигает 0
+                }
+            }
+        }, 1000)
+    }
+
+    private fun stopService() {
+        Log.d(TAG, "Stopping service...")
+        isRunning = false
+        handlerThread.quitSafely()
+        stopSelf()
+    }
+
+    override fun onBind(intent: Intent): IBinder {
+        return messenger.binder // Возвращаем IBinder для связи с активностью
     }
 
     override fun onDestroy() {
-        super.onDestroy()
-        handler.removeCallbacks(runnable) // Удалить обратный вызов при остановке сервиса
+        isRunning = false
         Log.d(TAG, "Service destroyed")
-    }
-
-    fun getCurrentProgress(): Int {
-        return countdownTime // Возвращаем текущее значение обратного отсчета
-    }
-
-    companion object {
-        private const val TAG = "MyService"
-        private const val CHANNEL_ID = "ForegroundServiceChannel"
+        super.onDestroy()
     }
 }
